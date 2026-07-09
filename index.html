@@ -419,6 +419,7 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const SESSION_CACHE_KEY='keep-session-cache';
+const LAST_VIEW_KEY='keep-last-view';
 
 /* ============================= SESSION CACHE (survives page refresh, cleared on tab/browser close) ============================= */
 async function cacheSession(){
@@ -429,6 +430,7 @@ async function cacheSession(){
 }
 function clearCachedSession(){
   sessionStorage.removeItem(SESSION_CACHE_KEY);
+  sessionStorage.removeItem(LAST_VIEW_KEY);
 }
 
 /* ============================= DATA LOADING ============================= */
@@ -468,7 +470,9 @@ async function init(){
         const key=await crypto.subtle.importKey('raw', keyBytes, {name:'AES-GCM'}, true, ['encrypt','decrypt']);
         session={key, userId:cached.userId, saltB64:cached.saltB64};
         vault=await loadAllData(cached.userId, key);
-        ui.view='dashboard';
+        const validViews=['dashboard','bank','gmail','apps','other','notes','tasklist','timetable','completed'];
+        const lastView=sessionStorage.getItem(LAST_VIEW_KEY);
+        ui.view = validViews.includes(lastView) ? lastView : 'dashboard';
         render();
         return;
       }
@@ -608,6 +612,7 @@ function render(){
     bindAuthEvents();
     return;
   }
+  sessionStorage.setItem(LAST_VIEW_KEY, ui.view);
   app.innerHTML = renderShell();
   bindShellEvents();
 }
