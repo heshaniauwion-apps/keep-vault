@@ -1141,12 +1141,15 @@ function closeModal(){
   const el=document.getElementById('modal-overlay');
   if(el) el.remove();
 }
-function openConfirmModal(message, onConfirm){
+function openConfirmModal(message, onConfirm, opts={}){
+  const title = opts.title || 'Delete this?';
+  const label = opts.label || 'Delete';
+  const btnClass = opts.danger===false ? 'btn' : 'btn btn-danger';
   openModal(`
-    <h3>Delete this?</h3>
+    <h3>${escapeHtml(title)}</h3>
     <p style="color:var(--text-dim);font-size:14px;margin:0 0 8px;line-height:1.5;">${escapeHtml(message)}</p>
     <div class="modalfoot">
-      <button class="btn btn-danger" id="confirm-yes-btn">Delete</button>
+      <button class="${btnClass}" id="confirm-yes-btn">${escapeHtml(label)}</button>
       <button class="btn btn-ghost" id="confirm-no-btn">Cancel</button>
     </div>
   `);
@@ -1233,14 +1236,16 @@ function openCredForm(id, defaultCat){
     toast('Saved');
   };
   if(editing){
-    document.getElementById('delete-cred-btn').onclick=async ()=>{
-      const {error}=await sb.from('credentials').update({archived:true}).eq('id', editing.id);
-      if(error){ toast('Could not archive: '+error.message, 'error'); return; }
-      const idx=vault.credentials.findIndex(c=>c.id===editing.id);
-      if(idx>-1) vault.credentials[idx].archived=true;
+    document.getElementById('delete-cred-btn').onclick=()=>{
       closeModal();
-      render();
-      toast('Moved to Archived');
+      openConfirmModal(`Move "${editing.title}" to Archived? You can restore it anytime.`, async ()=>{
+        const {error}=await sb.from('credentials').update({archived:true}).eq('id', editing.id);
+        if(error){ toast('Could not archive: '+error.message, 'error'); return; }
+        const idx=vault.credentials.findIndex(c=>c.id===editing.id);
+        if(idx>-1) vault.credentials[idx].archived=true;
+        render();
+        toast('Moved to Archived');
+      }, {title:'Delete this credential?', label:'Delete'});
     };
   }
 }
@@ -1377,25 +1382,29 @@ function bindViewEvents(){
     el.onclick=()=>openCredForm(el.getAttribute('data-edit'));
   });
   document.querySelectorAll('[data-del]').forEach(el=>{
-    el.onclick=async ()=>{
+    el.onclick=()=>{
       const id=el.getAttribute('data-del');
-      const {error}=await sb.from('credentials').update({archived:true}).eq('id', id);
-      if(error){ toast('Could not archive: '+error.message, 'error'); return; }
       const c=vault.credentials.find(x=>x.id===id);
-      if(c) c.archived=true;
-      render();
-      toast('Moved to Archived');
+      openConfirmModal(`Move "${c?c.title:'this credential'}" to Archived? You can restore it anytime.`, async ()=>{
+        const {error}=await sb.from('credentials').update({archived:true}).eq('id', id);
+        if(error){ toast('Could not archive: '+error.message, 'error'); return; }
+        if(c) c.archived=true;
+        render();
+        toast('Moved to Archived');
+      }, {title:'Delete this credential?', label:'Delete'});
     };
   });
   document.querySelectorAll('[data-restore-cred]').forEach(el=>{
-    el.onclick=async ()=>{
+    el.onclick=()=>{
       const id=el.getAttribute('data-restore-cred');
-      const {error}=await sb.from('credentials').update({archived:false}).eq('id', id);
-      if(error){ toast('Could not restore: '+error.message, 'error'); return; }
       const c=vault.credentials.find(x=>x.id===id);
-      if(c) c.archived=false;
-      render();
-      toast('Restored');
+      openConfirmModal(`Restore "${c?c.title:'this credential'}" back to your credential list?`, async ()=>{
+        const {error}=await sb.from('credentials').update({archived:false}).eq('id', id);
+        if(error){ toast('Could not restore: '+error.message, 'error'); return; }
+        if(c) c.archived=false;
+        render();
+        toast('Restored');
+      }, {title:'Restore this credential?', label:'Restore', danger:false});
     };
   });
   document.querySelectorAll('[data-perm-del-cred]').forEach(el=>{
