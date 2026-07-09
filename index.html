@@ -367,19 +367,23 @@ async function deriveKey(password, saltBytes){
   const keyMaterial=await crypto.subtle.importKey('raw',enc.encode(password),{name:'PBKDF2'},false,['deriveKey']);
   return crypto.subtle.deriveKey(
     {name:'PBKDF2',salt:saltBytes,iterations:150000,hash:'SHA-256'},
-    keyMaterial,{name:'AES-GCM',length:256},false,['encrypt','decrypt']
+    keyMaterial,{name:'AES-GCM',length:256},true,['encrypt','decrypt']
   );
 }
-async function encryptJSON(key,obj){
+async function encField(key, plaintext){
+  if(!plaintext) return '';
   const iv=crypto.getRandomValues(new Uint8Array(12));
   const enc=new TextEncoder();
-  const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(JSON.stringify(obj)));
-  return {iv:bytesToB64(iv),ct:bytesToB64(ct)};
+  const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(plaintext));
+  return bytesToB64(iv)+'.'+bytesToB64(ct);
 }
-async function decryptJSON(key,ivB64,ctB64){
-  const iv=b64ToBytes(ivB64);const ct=b64ToBytes(ctB64);
+async function decField(key, packed){
+  if(!packed) return '';
+  const parts=packed.split('.');
+  if(parts.length!==2) return '';
+  const iv=b64ToBytes(parts[0]); const ct=b64ToBytes(parts[1]);
   const dec=await crypto.subtle.decrypt({name:'AES-GCM',iv},key,ct);
-  return JSON.parse(new TextDecoder().decode(dec));
+  return new TextDecoder().decode(dec);
 }
 function genPassword(len=16){
   const chars='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*';
@@ -389,8 +393,8 @@ function genPassword(len=16){
 function uid(){return crypto.randomUUID();}
 
 /* ============================= STATE ============================= */
-let session=null; /* {key, saltB64} */
-let vault=null;   /* {credentials:[], notes:[], tasks:[]} */
+let session=null; /* {key, userId, saltB64} */
+let vault=null;   /* {account:{name}, credentials:[], notes:[], tasks:[]} */
 let ui={view:'dashboard', search:'', weekOffset:0, revealed:new Set(), authMode:null, err:''};
 
 const CATS={
@@ -411,33 +415,66 @@ const TASK_CATS={
    (Project Settings -> API in the Supabase dashboard).
    ============================================================================ */
 const SUPABASE_URL = 'https://fgeitkjegpqvhcnbfmpb.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZnZWl0a2plZ3BxdmhjbmJmbXBiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM1NDE0MjksImV4cCI6MjA5OTExNzQyOX0.kEZW_RRMQdMt9NaHGp2uewDyr-5tYoBWrVLccpe51XU'
-;
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZnZWl0a2plZ3BxdmhjbmJmbXBiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM1NDE0MjksImV4cCI6MjA5OTExNzQyOX0.kEZW_RRMQdMt9NaHGp2uewDyr-5tYoBWrVLccpe51XU';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-/* ============================= STORAGE (Supabase) ============================= */
-async function loadBlob(userId){
-  const {data, error} = await sb.from('vaults').select('*').eq('user_id', userId).maybeSingle();
-  if(error || !data) return null;
-  return {salt:data.salt, iv:data.iv, ct:data.ciphertext};
+const SESSION_CACHE_KEY='keep-session-cache';
+
+/* ============================= SESSION CACHE (survives page refresh, cleared on tab/browser close) ============================= */
+async function cacheSession(){
+  const raw=await crypto.subtle.exportKey('raw', session.key);
+  sessionStorage.setItem(SESSION_CACHE_KEY, JSON.stringify({
+    userId: session.userId, saltB64: session.saltB64, keyRaw: bytesToB64(raw)
+  }));
 }
-async function saveBlob(userId, blobObj){
-  const {error} = await sb.from('vaults').upsert({
-    user_id: userId,
-    salt: blobObj.salt,
-    iv: blobObj.iv,
-    ciphertext: blobObj.ct,
-    updated_at: new Date().toISOString()
-  });
-  if(error) throw error;
+function clearCachedSession(){
+  sessionStorage.removeItem(SESSION_CACHE_KEY);
 }
-async function persist(){
-  const enc=await encryptJSON(session.key, vault);
-  await saveBlob(session.userId, {salt:session.saltB64, iv:enc.iv, ct:enc.ct});
+
+/* ============================= DATA LOADING ============================= */
+async function loadAllData(userId, key){
+  const [profileRes, credRes, noteRes, taskRes] = await Promise.all([
+    sb.from('profiles').select('*').eq('user_id', userId).maybeSingle(),
+    sb.from('credentials').select('*').eq('user_id', userId),
+    sb.from('notes').select('*').eq('user_id', userId),
+    sb.from('tasks').select('*').eq('user_id', userId)
+  ]);
+  const name = profileRes.data ? profileRes.data.name : '';
+  const credentials = await Promise.all((credRes.data||[]).map(async r=>({
+    id:r.id, category:r.category, title:r.title, username:r.username,
+    password: await decField(key, r.password_enc),
+    pin: await decField(key, r.pin_enc),
+    notes: await decField(key, r.notes_enc),
+    updatedAt: r.updated_at
+  })));
+  const notes = await Promise.all((noteRes.data||[]).map(async r=>({
+    id:r.id, title:r.title, body: await decField(key, r.body_enc), updatedAt:r.updated_at
+  })));
+  const tasks = (taskRes.data||[]).map(r=>({
+    id:r.id, text:r.text, category:r.category, date:r.date, time:r.time||'', done:r.done, createdAt:r.created_at
+  }));
+  return {account:{name: name||''}, credentials, notes, tasks};
 }
 
 /* ============================= INIT ============================= */
 async function init(){
+  const cachedRaw=sessionStorage.getItem(SESSION_CACHE_KEY);
+  if(cachedRaw){
+    try{
+      const cached=JSON.parse(cachedRaw);
+      const {data:{session:sbSession}} = await sb.auth.getSession();
+      if(sbSession && sbSession.user && sbSession.user.id===cached.userId){
+        const keyBytes=b64ToBytes(cached.keyRaw);
+        const key=await crypto.subtle.importKey('raw', keyBytes, {name:'AES-GCM'}, true, ['encrypt','decrypt']);
+        session={key, userId:cached.userId, saltB64:cached.saltB64};
+        vault=await loadAllData(cached.userId, key);
+        ui.view='dashboard';
+        render();
+        return;
+      }
+    }catch(e){ /* fall through to login */ }
+    clearCachedSession();
+  }
   ui.authMode='login';
   render();
 }
@@ -463,15 +500,14 @@ async function doSetup(name, email, pw, confirm){
   const saltBytes=crypto.getRandomValues(new Uint8Array(16));
   const saltB64=bytesToB64(saltBytes);
   const key=await deriveKey(pw, saltBytes);
+  const checkEnc=await encField(key, 'unlock-check');
+  const {error:profErr} = await sb.from('profiles').upsert({
+    user_id:userId, name:name.trim(), salt:saltB64, check_enc:checkEnc
+  });
+  if(profErr){ ui.err='Account created but saving your profile failed: '+profErr.message; render(); return; }
   vault={account:{name:name.trim()}, credentials:[], notes:[], tasks:[]};
   session={key, saltB64, userId};
-  try{
-    await persist();
-  }catch(e){
-    ui.err='Account created but saving the vault failed: '+e.message;
-    render();
-    return;
-  }
+  await cacheSession();
   ui.err='';
   ui.view='dashboard';
   render();
@@ -483,26 +519,30 @@ async function doLogin(email, pw){
   const {data, error} = await sb.auth.signInWithPassword({email, password:pw});
   if(error){ ui.err='Incorrect email or password.'; render(); return; }
   const userId=data.user.id;
-  const blob=await loadBlob(userId);
-  if(!blob){
+  const {data:profile} = await sb.from('profiles').select('*').eq('user_id', userId).maybeSingle();
+
+  if(!profile){
+    /* first login after account existed without a profile row (edge case) */
     const saltBytes=crypto.getRandomValues(new Uint8Array(16));
     const saltB64=bytesToB64(saltBytes);
     const key=await deriveKey(pw, saltBytes);
+    const checkEnc=await encField(key, 'unlock-check');
+    await sb.from('profiles').upsert({user_id:userId, name:'', salt:saltB64, check_enc:checkEnc});
     vault={account:{name:''}, credentials:[], notes:[], tasks:[]};
     session={key, saltB64, userId};
-    try{ await persist(); }catch(e){ ui.err='Could not create your vault: '+e.message; render(); return; }
-    ui.err='';
-    ui.view='dashboard';
-    render();
+    await cacheSession();
+    ui.err=''; ui.view='dashboard'; render();
     return;
   }
-  const saltBytes=b64ToBytes(blob.salt);
+
+  const saltBytes=b64ToBytes(profile.salt);
   const key=await deriveKey(pw, saltBytes);
   try{
-    const data2=await decryptJSON(key, blob.iv, blob.ct);
-    vault=data2;
-    if(!vault.account) vault.account={name:''};
-    session={key, saltB64:blob.salt, userId};
+    const check=await decField(key, profile.check_enc);
+    if(check!=='unlock-check') throw new Error('bad password');
+    vault=await loadAllData(userId, key);
+    session={key, saltB64:profile.salt, userId};
+    await cacheSession();
     ui.err='';
     ui.view='dashboard';
     render();
@@ -514,15 +554,22 @@ async function doLogin(email, pw){
 }
 async function doLock(){
   await sb.auth.signOut();
+  clearCachedSession();
   session=null; vault=null; ui.err=''; ui.authMode='login'; ui.revealed=new Set();
   render();
 }
 async function doResetVault(){
   openConfirmModal('This deletes your entire vault permanently, including every credential, note, and task. This cannot be undone.', async ()=>{
     if(session && session.userId){
-      await sb.from('vaults').delete().eq('user_id', session.userId);
+      await Promise.all([
+        sb.from('credentials').delete().eq('user_id', session.userId),
+        sb.from('notes').delete().eq('user_id', session.userId),
+        sb.from('tasks').delete().eq('user_id', session.userId),
+        sb.from('profiles').delete().eq('user_id', session.userId)
+      ]);
     }
     await sb.auth.signOut();
+    clearCachedSession();
     session=null; vault=null; ui.authMode='login'; ui.err='';
     render();
     toast('Vault deleted');
@@ -1076,23 +1123,31 @@ function openCredForm(id, defaultCat){
   document.getElementById('save-cred-btn').onclick=async ()=>{
     const title=document.getElementById('f-title').value.trim();
     if(!title){ toast('Give it a title first'); return; }
-    const payload={
-      id: editing? editing.id : uid(),
-      category: document.getElementById('f-cat').value,
-      title,
-      username: document.getElementById('f-username').value.trim(),
-      password: document.getElementById('f-password').value,
-      pin: document.getElementById('f-pin').value.trim(),
-      notes: document.getElementById('f-notes').value.trim(),
-      updatedAt: new Date().toISOString()
-    };
+    const category=document.getElementById('f-cat').value;
+    const username=document.getElementById('f-username').value.trim();
+    const passwordPlain=document.getElementById('f-password').value;
+    const pinPlain=document.getElementById('f-pin').value.trim();
+    const notesPlain=document.getElementById('f-notes').value.trim();
+    const [password_enc, pin_enc, notes_enc] = await Promise.all([
+      encField(session.key, passwordPlain),
+      encField(session.key, pinPlain),
+      encField(session.key, notesPlain)
+    ]);
+    const nowIso=new Date().toISOString();
     if(editing){
+      const {error}=await sb.from('credentials').update({
+        category, title, username, password_enc, pin_enc, notes_enc, updated_at:nowIso
+      }).eq('id', editing.id);
+      if(error){ toast('Could not save: '+error.message); return; }
       const idx=vault.credentials.findIndex(c=>c.id===editing.id);
-      vault.credentials[idx]=payload;
+      vault.credentials[idx]={id:editing.id, category, title, username, password:passwordPlain, pin:pinPlain, notes:notesPlain, updatedAt:nowIso};
     }else{
-      vault.credentials.push(payload);
+      const {data, error}=await sb.from('credentials').insert({
+        user_id:session.userId, category, title, username, password_enc, pin_enc, notes_enc
+      }).select().single();
+      if(error){ toast('Could not save: '+error.message); return; }
+      vault.credentials.push({id:data.id, category, title, username, password:passwordPlain, pin:pinPlain, notes:notesPlain, updatedAt:data.updated_at});
     }
-    await persist();
     closeModal();
     render();
     toast('Saved');
@@ -1101,8 +1156,9 @@ function openCredForm(id, defaultCat){
     document.getElementById('delete-cred-btn').onclick=()=>{
       closeModal();
       openConfirmModal(`Delete "${editing.title}"? This can't be undone.`, async ()=>{
+        const {error}=await sb.from('credentials').delete().eq('id', editing.id);
+        if(error){ toast('Could not delete: '+error.message); return; }
         vault.credentials=vault.credentials.filter(c=>c.id!==editing.id);
-        await persist();
         render();
         toast('Deleted');
       });
@@ -1131,18 +1187,18 @@ function openNoteForm(id){
     const title=document.getElementById('f-note-title').value.trim();
     const body=document.getElementById('f-note-body').value.trim();
     if(!title && !body){ toast('Write something first'); return; }
-    const payload={
-      id: editing? editing.id : uid(),
-      title, body,
-      updatedAt: new Date().toISOString()
-    };
+    const body_enc=await encField(session.key, body);
+    const nowIso=new Date().toISOString();
     if(editing){
+      const {error}=await sb.from('notes').update({title, body_enc, updated_at:nowIso}).eq('id', editing.id);
+      if(error){ toast('Could not save: '+error.message); return; }
       const idx=vault.notes.findIndex(n=>n.id===editing.id);
-      vault.notes[idx]=payload;
+      vault.notes[idx]={id:editing.id, title, body, updatedAt:nowIso};
     }else{
-      vault.notes.push(payload);
+      const {data, error}=await sb.from('notes').insert({user_id:session.userId, title, body_enc}).select().single();
+      if(error){ toast('Could not save: '+error.message); return; }
+      vault.notes.push({id:data.id, title, body, updatedAt:data.updated_at});
     }
-    await persist();
     closeModal();
     render();
     toast('Saved');
@@ -1151,8 +1207,9 @@ function openNoteForm(id){
     document.getElementById('delete-note-btn').onclick=()=>{
       closeModal();
       openConfirmModal(`Delete "${editing.title||'this note'}"? This can't be undone.`, async ()=>{
+        const {error}=await sb.from('notes').delete().eq('id', editing.id);
+        if(error){ toast('Could not delete: '+error.message); return; }
         vault.notes=vault.notes.filter(n=>n.id!==editing.id);
-        await persist();
         render();
         toast('Deleted');
       });
@@ -1191,22 +1248,21 @@ function openTaskForm(id, defaultDate, defaultTime){
   document.getElementById('save-task-btn').onclick=async ()=>{
     const text=document.getElementById('f-task-text').value.trim();
     if(!text){ toast('Write the task first'); return; }
-    const payload={
-      id: editing? editing.id : uid(),
-      text,
-      category: document.getElementById('f-task-cat').value,
-      date: document.getElementById('f-task-date').value || todayISO(),
-      time: document.getElementById('f-task-time').value || '',
-      done: editing? editing.done : false,
-      createdAt: editing? editing.createdAt : new Date().toISOString()
-    };
+    const category=document.getElementById('f-task-cat').value;
+    const date=document.getElementById('f-task-date').value || todayISO();
+    const time=document.getElementById('f-task-time').value || '';
     if(editing){
+      const {error}=await sb.from('tasks').update({text, category, date, time}).eq('id', editing.id);
+      if(error){ toast('Could not save: '+error.message); return; }
       const idx=vault.tasks.findIndex(t=>t.id===editing.id);
-      vault.tasks[idx]=payload;
+      vault.tasks[idx]={...editing, text, category, date, time};
     }else{
-      vault.tasks.push(payload);
+      const {data, error}=await sb.from('tasks').insert({
+        user_id:session.userId, text, category, date, time, done:false
+      }).select().single();
+      if(error){ toast('Could not save: '+error.message); return; }
+      vault.tasks.push({id:data.id, text, category, date, time, done:false, createdAt:data.created_at});
     }
-    await persist();
     closeModal();
     render();
     toast('Saved');
@@ -1215,8 +1271,9 @@ function openTaskForm(id, defaultDate, defaultTime){
     document.getElementById('delete-task-btn').onclick=()=>{
       closeModal();
       openConfirmModal(`Delete "${editing.text}"? This can't be undone.`, async ()=>{
+        const {error}=await sb.from('tasks').delete().eq('id', editing.id);
+        if(error){ toast('Could not delete: '+error.message); return; }
         vault.tasks=vault.tasks.filter(t=>t.id!==editing.id);
-        await persist();
         render();
         toast('Deleted');
       });
@@ -1245,8 +1302,9 @@ function bindViewEvents(){
       const id=el.getAttribute('data-del');
       const c=vault.credentials.find(x=>x.id===id);
       openConfirmModal(`Delete "${c?c.title:'this credential'}"? This can't be undone.`, async ()=>{
+        const {error}=await sb.from('credentials').delete().eq('id', id);
+        if(error){ toast('Could not delete: '+error.message); return; }
         vault.credentials=vault.credentials.filter(x=>x.id!==id);
-        await persist();
         render();
         toast('Deleted');
       });
@@ -1286,7 +1344,12 @@ function bindViewEvents(){
       e.stopPropagation();
       const id=el.getAttribute('data-toggle-task');
       const t=vault.tasks.find(x=>x.id===id);
-      if(t){ t.done=!t.done; await persist(); render(); }
+      if(!t) return;
+      const newDone=!t.done;
+      const {error}=await sb.from('tasks').update({done:newDone}).eq('id', id);
+      if(error){ toast('Could not update: '+error.message); return; }
+      t.done=newDone;
+      render();
     };
   });
   document.querySelectorAll('[data-del-task]').forEach(el=>{
@@ -1295,8 +1358,9 @@ function bindViewEvents(){
       const id=el.getAttribute('data-del-task');
       const t=vault.tasks.find(x=>x.id===id);
       openConfirmModal(`Delete "${t?t.text:'this task'}"? This can't be undone.`, async ()=>{
+        const {error}=await sb.from('tasks').delete().eq('id', id);
+        if(error){ toast('Could not delete: '+error.message); return; }
         vault.tasks=vault.tasks.filter(x=>x.id!==id);
-        await persist();
         render();
         toast('Deleted');
       });
