@@ -831,7 +831,6 @@ function credRowHTML(c){
     <div class="catdot">${CATS[c.category].letter}</div>
     <div class="credinfo">
       <div class="credtitle">${escapeHtml(c.title)}</div>
-      <div class="creduser">${escapeHtml(c.username||'—')}</div>
     </div>
     <div class="credpass" data-reveal-target>${revealed? escapeHtml(c.password||'') : '••••••••'}</div>
     <div class="rowactions">
@@ -847,7 +846,7 @@ function renderCategory(catKey){
   let list=vault.credentials.filter(c=>c.category===catKey);
   if(ui.search){
     const q=ui.search.toLowerCase();
-    list=list.filter(c=>(c.title||'').toLowerCase().includes(q) || (c.username||'').toLowerCase().includes(q));
+    list=list.filter(c=>(c.title||'').toLowerCase().includes(q));
   }
   list=[...list].sort((a,b)=>(a.title||'').localeCompare(b.title||''));
   return `
@@ -1100,9 +1099,6 @@ function openCredForm(id, defaultCat){
     <div class="field"><label>Title</label>
       <input id="f-title" placeholder="e.g. Chase checking, Personal Gmail" value="${escapeHtml(editing?.title||'')}">
     </div>
-    <div class="field"><label>Username / email</label>
-      <input id="f-username" placeholder="Username or email" value="${escapeHtml(editing?.username||'')}">
-    </div>
     <div class="field"><label>Password</label>
       <div class="pwrow">
         <input id="f-password" placeholder="Password" value="${escapeHtml(editing?.password||'')}">
@@ -1129,7 +1125,6 @@ function openCredForm(id, defaultCat){
     const title=document.getElementById('f-title').value.trim();
     if(!title){ toast('Give it a title first'); return; }
     const category=document.getElementById('f-cat').value;
-    const username=document.getElementById('f-username').value.trim();
     const passwordPlain=document.getElementById('f-password').value;
     const pinPlain=document.getElementById('f-pin').value.trim();
     const notesPlain=document.getElementById('f-notes').value.trim();
@@ -1141,17 +1136,17 @@ function openCredForm(id, defaultCat){
     const nowIso=new Date().toISOString();
     if(editing){
       const {error}=await sb.from('credentials').update({
-        category, title, username, password_enc, pin_enc, notes_enc, updated_at:nowIso
+        category, title, password_enc, pin_enc, notes_enc, updated_at:nowIso
       }).eq('id', editing.id);
       if(error){ toast('Could not save: '+error.message); return; }
       const idx=vault.credentials.findIndex(c=>c.id===editing.id);
-      vault.credentials[idx]={id:editing.id, category, title, username, password:passwordPlain, pin:pinPlain, notes:notesPlain, updatedAt:nowIso};
+      vault.credentials[idx]={id:editing.id, category, title, password:passwordPlain, pin:pinPlain, notes:notesPlain, updatedAt:nowIso};
     }else{
       const {data, error}=await sb.from('credentials').insert({
-        user_id:session.userId, category, title, username, password_enc, pin_enc, notes_enc
+        user_id:session.userId, category, title, password_enc, pin_enc, notes_enc
       }).select().single();
       if(error){ toast('Could not save: '+error.message); return; }
-      vault.credentials.push({id:data.id, category, title, username, password:passwordPlain, pin:pinPlain, notes:notesPlain, updatedAt:data.updated_at});
+      vault.credentials.push({id:data.id, category, title, password:passwordPlain, pin:pinPlain, notes:notesPlain, updatedAt:data.updated_at});
     }
     closeModal();
     render();
