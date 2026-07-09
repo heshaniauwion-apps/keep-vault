@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Keep — your vault</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#8a6a1e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Keep">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
@@ -198,8 +205,10 @@
   .credpass{
     font-family:var(--font-mono);font-size:13px;color:var(--text-dim);
     background:var(--panel-2);padding:5px 9px;border-radius:6px;
-    min-width:110px;text-align:center;border:1px solid var(--border-soft);
+    min-width:90px;text-align:center;border:1px solid var(--border-soft);
+    cursor:pointer;user-select:text;flex-shrink:0;
   }
+  .credpass:active{background:var(--panel-3);}
   .iconbtn{
     width:30px;height:30px;border-radius:7px;border:1px solid var(--border);
     background:transparent;color:var(--text-dim);cursor:pointer;font-size:13px;
@@ -345,6 +354,29 @@
     .statgrid{grid-template-columns:repeat(2,1fr);}
     .dashgrid{grid-template-columns:1fr;}
   }
+
+  @media(max-width:480px){
+    .main{padding:16px 12px 60px;}
+    .pagetitle{font-size:20px;}
+    .pagesub{font-size:12px;}
+    .topbar{flex-direction:column;align-items:flex-start;gap:10px;}
+    .topactions{width:100%;flex-wrap:wrap;}
+    .topactions .btn-sm{flex:1;}
+    .searchbox{width:100%;}
+    .statgrid{gap:10px;margin-bottom:20px;}
+    .statcard{padding:12px 14px;}
+    .statnum{font-size:22px;}
+    .panelbox{padding:14px 14px;}
+    .navitem{font-size:13px;padding:7px 9px;}
+    .navbadge{width:18px;height:18px;font-size:9px;}
+    .navcount{font-size:10px;}
+    .credrow{flex-wrap:wrap;row-gap:8px;}
+    .credinfo{min-width:100%;order:1;}
+    .catdot{order:0;}
+    .credpass{order:2;}
+    .rowactions{order:3;margin-left:auto;}
+    .lockcard{padding:28px 22px 24px;}
+  }
 </style>
 </head>
 <body>
@@ -443,7 +475,7 @@ async function loadAllData(userId, key){
   ]);
   const name = profileRes.data ? profileRes.data.name : '';
   const credentials = await Promise.all((credRes.data||[]).map(async r=>({
-    id:r.id, category:r.category, title:r.title, username:r.username,
+    id:r.id, category:r.category, title:r.title, username:r.username, archived:!!r.archived,
     password: await decField(key, r.password_enc),
     pin: await decField(key, r.pin_enc),
     atm: await decField(key, r.atm_enc),
@@ -471,7 +503,7 @@ async function init(){
         const key=await crypto.subtle.importKey('raw', keyBytes, {name:'AES-GCM'}, true, ['encrypt','decrypt']);
         session={key, userId:cached.userId, saltB64:cached.saltB64};
         vault=await loadAllData(cached.userId, key);
-        const validViews=['dashboard','bank','gmail','apps','other','notes','tasklist','timetable','completed'];
+        const validViews=['dashboard','bank','gmail','apps','other','archived','notes','tasklist','timetable','completed'];
         const lastView=sessionStorage.getItem(LAST_VIEW_KEY);
         ui.view = validViews.includes(lastView) ? lastView : 'dashboard';
         render();
@@ -713,7 +745,7 @@ function bindAuthEvents(){
 }
 
 /* ============================= SHELL ============================= */
-function countByCat(cat){ return vault.credentials.filter(c=>c.category===cat).length; }
+function countByCat(cat){ return vault.credentials.filter(c=>c.category===cat && !c.archived).length; }
 function pendingTaskCount(){ return vault.tasks.filter(t=>!t.done).length; }
 
 function renderShell(){
@@ -737,6 +769,10 @@ function renderShell(){
             <span class="navbadge">${c.letter}</span> ${c.label}
             <span class="navcount">${countByCat(key)}</span>
           </div>`).join('')}
+        <div class="navitem ${ui.view==='archived'?'active':''}" data-nav="archived">
+          <span class="navbadge">⌦</span> Archived
+          <span class="navcount">${vault.credentials.filter(c=>c.archived).length}</span>
+        </div>
       </div>
       <div class="navsection">
         <div class="navlabel">Workspace</div>
@@ -776,6 +812,7 @@ function bindShellEvents(){
 function renderView(){
   if(ui.view==='dashboard') return renderDashboard();
   if(CATS[ui.view]) return renderCategory(ui.view);
+  if(ui.view==='archived') return renderArchivedCreds();
   if(ui.view==='notes') return renderNotes();
   if(ui.view==='tasklist') return renderTaskList();
   if(ui.view==='timetable') return renderTimeTable();
@@ -789,7 +826,6 @@ function renderDashboard(){
   const totalNotes=vault.notes.length;
   const todayStr=todayISO();
   const todayTasks=vault.tasks.filter(t=>t.date===todayStr && !t.done);
-  const recent=[...vault.credentials].sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||'')).slice(0,5);
 
   return `
   <div class="topbar">
@@ -808,19 +844,11 @@ function renderDashboard(){
     <div class="statcard"><div class="statnum">${pendingTaskCount()}</div><div class="statlbl">Open tasks</div></div>
     <div class="statcard"><div class="statnum">${todayTasks.length}</div><div class="statlbl">Due today</div></div>
   </div>
-  <div class="dashgrid">
-    <div class="panelbox">
-      <div class="panelhead"><h3>Recently updated</h3>
-        <button class="linklike" data-nav2="bank">View all</button>
-      </div>
-      ${recent.length? recent.map(c=>credRowHTML(c)).join('') : '<div class="emptyrow">Nothing saved yet. Add your first credential.</div>'}
+  <div class="panelbox">
+    <div class="panelhead"><h3>Today's tasks</h3>
+      <button class="linklike" data-nav2="tasklist">Open tasks</button>
     </div>
-    <div class="panelbox">
-      <div class="panelhead"><h3>Today's tasks</h3>
-        <button class="linklike" data-nav2="tasklist">Open tasks</button>
-      </div>
-      ${todayTasks.length? todayTasks.map(t=>taskRowHTML(t)).join('') : '<div class="emptyrow">Nothing due today.</div>'}
-    </div>
+    ${todayTasks.length? todayTasks.map(t=>taskRowHTML(t)).join('') : '<div class="emptyrow">Nothing due today.</div>'}
   </div>`;
 }
 
@@ -834,10 +862,8 @@ function credRowHTML(c){
       <div class="credtitle">${escapeHtml(c.title)}</div>
       ${c.username? `<div class="creduser">${escapeHtml(c.username)}</div>` : ''}
     </div>
-    <div class="credpass" data-reveal-target>${revealed? escapeHtml(c.password||'') : '••••••••'}</div>
+    <div class="credpass" data-reveal="${c.id}" title="Tap to ${revealed?'hide':'show'}">${revealed? escapeHtml(c.password||'') : '••••••••'}</div>
     <div class="rowactions">
-      <button class="iconbtn" data-reveal="${c.id}" title="${revealed?'Hide':'Show'}">${revealed?'−':'⊙'}</button>
-      <button class="iconbtn" data-copy="${c.id}" title="Copy password">⧉</button>
       <button class="iconbtn" data-edit="${c.id}" title="Edit">✎</button>
       <button class="iconbtn" data-del="${c.id}" title="Delete">×</button>
     </div>
@@ -845,7 +871,7 @@ function credRowHTML(c){
 }
 function renderCategory(catKey){
   const cat=CATS[catKey];
-  let list=vault.credentials.filter(c=>c.category===catKey);
+  let list=vault.credentials.filter(c=>c.category===catKey && !c.archived);
   if(ui.search){
     const q=ui.search.toLowerCase();
     list=list.filter(c=>(c.title||'').toLowerCase().includes(q) || (c.username||'').toLowerCase().includes(q));
@@ -864,6 +890,35 @@ function renderCategory(catKey){
   </div>
   <div class="panelbox">
     ${list.length? list.map(c=>credRowHTML(c)).join('') : `<div class="emptyrow">No entries yet in ${cat.label}. Add your first one.</div>`}
+  </div>`;
+}
+
+function archivedCredRowHTML(c){
+  const cat=CATS[c.category]||CATS.other;
+  return `
+  <div class="credrow" data-cred-id="${c.id}">
+    <div class="catdot">${cat.letter}</div>
+    <div class="credinfo">
+      <div class="credtitle">${escapeHtml(c.title)}</div>
+      ${c.username? `<div class="creduser">${escapeHtml(c.username)}</div>` : ''}
+    </div>
+    <div class="rowactions">
+      <button class="iconbtn" data-restore-cred="${c.id}" title="Restore">↺</button>
+      <button class="iconbtn" data-perm-del-cred="${c.id}" title="Delete permanently">×</button>
+    </div>
+  </div>`;
+}
+function renderArchivedCreds(){
+  const list=[...vault.credentials].filter(c=>c.archived).sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''));
+  return `
+  <div class="topbar">
+    <div>
+      <h1 class="pagetitle">Archived</h1>
+      <p class="pagesub">${list.length} archived credential${list.length===1?'':'s'} — restore or delete for good</p>
+    </div>
+  </div>
+  <div class="panelbox">
+    ${list.length? list.map(c=>archivedCredRowHTML(c)).join('') : '<div class="emptyrow">Nothing archived. Deleted credentials land here first.</div>'}
   </div>`;
 }
 
@@ -1164,15 +1219,14 @@ function openCredForm(id, defaultCat){
     toast('Saved');
   };
   if(editing){
-    document.getElementById('delete-cred-btn').onclick=()=>{
+    document.getElementById('delete-cred-btn').onclick=async ()=>{
+      const {error}=await sb.from('credentials').update({archived:true}).eq('id', editing.id);
+      if(error){ toast('Could not archive: '+error.message); return; }
+      const idx=vault.credentials.findIndex(c=>c.id===editing.id);
+      if(idx>-1) vault.credentials[idx].archived=true;
       closeModal();
-      openConfirmModal(`Delete "${editing.title}"? This can't be undone.`, async ()=>{
-        const {error}=await sb.from('credentials').delete().eq('id', editing.id);
-        if(error){ toast('Could not delete: '+error.message); return; }
-        vault.credentials=vault.credentials.filter(c=>c.id!==editing.id);
-        render();
-        toast('Deleted');
-      });
+      render();
+      toast('Moved to Archived');
     };
   }
 }
@@ -1309,15 +1363,37 @@ function bindViewEvents(){
     el.onclick=()=>openCredForm(el.getAttribute('data-edit'));
   });
   document.querySelectorAll('[data-del]').forEach(el=>{
-    el.onclick=()=>{
+    el.onclick=async ()=>{
       const id=el.getAttribute('data-del');
+      const {error}=await sb.from('credentials').update({archived:true}).eq('id', id);
+      if(error){ toast('Could not archive: '+error.message); return; }
       const c=vault.credentials.find(x=>x.id===id);
-      openConfirmModal(`Delete "${c?c.title:'this credential'}"? This can't be undone.`, async ()=>{
+      if(c) c.archived=true;
+      render();
+      toast('Moved to Archived');
+    };
+  });
+  document.querySelectorAll('[data-restore-cred]').forEach(el=>{
+    el.onclick=async ()=>{
+      const id=el.getAttribute('data-restore-cred');
+      const {error}=await sb.from('credentials').update({archived:false}).eq('id', id);
+      if(error){ toast('Could not restore: '+error.message); return; }
+      const c=vault.credentials.find(x=>x.id===id);
+      if(c) c.archived=false;
+      render();
+      toast('Restored');
+    };
+  });
+  document.querySelectorAll('[data-perm-del-cred]').forEach(el=>{
+    el.onclick=()=>{
+      const id=el.getAttribute('data-perm-del-cred');
+      const c=vault.credentials.find(x=>x.id===id);
+      openConfirmModal(`Permanently delete "${c?c.title:'this credential'}"? This can't be undone.`, async ()=>{
         const {error}=await sb.from('credentials').delete().eq('id', id);
         if(error){ toast('Could not delete: '+error.message); return; }
         vault.credentials=vault.credentials.filter(x=>x.id!==id);
         render();
-        toast('Deleted');
+        toast('Deleted permanently');
       });
     };
   });
@@ -1326,13 +1402,6 @@ function bindViewEvents(){
       const id=el.getAttribute('data-reveal');
       if(ui.revealed.has(id)) ui.revealed.delete(id); else ui.revealed.add(id);
       render();
-    };
-  });
-  document.querySelectorAll('[data-copy]').forEach(el=>{
-    el.onclick=()=>{
-      const id=el.getAttribute('data-copy');
-      const c=vault.credentials.find(x=>x.id===id);
-      if(c) copyText(c.password||'');
     };
   });
   document.querySelectorAll('[data-note-open]').forEach(el=>{
@@ -1400,6 +1469,11 @@ function bindViewEvents(){
 }
 
 init();
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('sw.js').catch(()=>{});
+  });
+}
 </script>
 </body>
 </html>
