@@ -128,6 +128,9 @@
     padding:0 8px 20px;color:var(--text);
   }
   .sblogo span{color:var(--brass);}
+  .sbaccountrow{padding:0 8px 16px;}
+  .sbaccount-name{display:block;font-size:13px;color:var(--text-dim);margin-bottom:10px;}
+  .sbaccount-name strong{color:var(--text);}
   .navsection{margin-bottom:18px;}
   .navlabel{
     font-size:11px;color:var(--text-faint);text-transform:uppercase;
@@ -356,6 +359,11 @@
     .shell{flex-direction:column;}
     .sidebar{width:100%;flex-direction:row;flex-wrap:wrap;padding:14px;}
     .sblogo{width:100%;padding-bottom:8px;}
+    .sbaccountrow{
+      width:100%;display:flex;align-items:center;justify-content:space-between;
+      flex-wrap:wrap;gap:8px;padding:0 0 10px;
+    }
+    .sbaccount-name{margin-bottom:0;}
     .navsection{margin-bottom:0;margin-right:14px;}
     .sbfooter{margin-top:10px;padding-top:0;border-top:none;width:100%;}
     .main{padding:20px 16px 50px;}
@@ -501,6 +509,14 @@ async function loadAllData(userId, key){
 
 /* ============================= INIT ============================= */
 async function init(){
+  sb.auth.onAuthStateChange((event)=>{
+    if(event==='PASSWORD_RECOVERY'){
+      session=null; vault=null;
+      ui.authMode='recovery';
+      ui.err='';
+      render();
+    }
+  });
   const cachedRaw=sessionStorage.getItem(SESSION_CACHE_KEY);
   if(cachedRaw){
     try{
@@ -597,6 +613,80 @@ async function doLogin(email, pw){
     render();
   }
 }
+async function doForgotPassword(email){
+  ui.err='';
+  if(!email || !email.includes('@')){ ui.err='Enter your account email first, then tap "Forgot password".'; render(); return; }
+  ui.err='Sending reset email…'; render();
+  const {error} = await sb.auth.resetPasswordForEmail(email, {redirectTo: window.location.href.split('#')[0].split('?')[0]});
+  if(error){ ui.err=error.message; render(); return; }
+  ui.err='Check your email for a password reset link.';
+  render();
+}
+async function doCompleteRecovery(newPw, confirmPw, oldPw){
+  ui.err='';
+  if(newPw.length<8){ ui.err='Use at least 8 characters for your new password.'; render(); return; }
+  if(newPw!==confirmPw){ ui.err='New passwords do not match.'; render(); return; }
+  ui.err='Updating your login…'; render();
+
+  const {data:{user}} = await sb.auth.getUser();
+  if(!user){ ui.err='Your recovery link expired. Please request a new one.'; render(); return; }
+  const userId=user.id;
+
+  const {data:profile} = await sb.from('profiles').select('*').eq('user_id', userId).maybeSingle();
+
+  let migrated=false;
+  if(profile && oldPw){
+    try{
+      const oldSaltBytes=b64ToBytes(profile.salt);
+      const oldKey=await deriveKey(oldPw, oldSaltBytes);
+      const check=await decField(oldKey, profile.check_enc);
+      if(check==='unlock-check'){
+        const oldVault=await loadAllData(userId, oldKey);
+        const newSaltBytes=crypto.getRandomValues(new Uint8Array(16));
+        const newSaltB64=bytesToB64(newSaltBytes);
+        const newKey=await deriveKey(newPw, newSaltBytes);
+        const newCheckEnc=await encField(newKey, 'unlock-check');
+
+        await Promise.all(oldVault.credentials.map(async c=>{
+          const [password_enc, pin_enc, atm_enc, notes_enc] = await Promise.all([
+            encField(newKey, c.password), encField(newKey, c.pin), encField(newKey, c.atm), encField(newKey, c.notes)
+          ]);
+          return sb.from('credentials').update({password_enc, pin_enc, atm_enc, notes_enc}).eq('id', c.id);
+        }));
+        await Promise.all(oldVault.notes.map(async n=>{
+          const body_enc=await encField(newKey, n.body);
+          return sb.from('notes').update({body_enc}).eq('id', n.id);
+        }));
+        await sb.from('profiles').update({salt:newSaltB64, check_enc:newCheckEnc}).eq('user_id', userId);
+        migrated=true;
+      }
+    }catch(e){ migrated=false; }
+  }
+
+  const {error:updErr} = await sb.auth.updateUser({password:newPw});
+  if(updErr){ ui.err='Login password could not be updated: '+updErr.message; render(); return; }
+
+  if(!migrated){
+    const saltBytes=crypto.getRandomValues(new Uint8Array(16));
+    const saltB64=bytesToB64(saltBytes);
+    const key=await deriveKey(newPw, saltBytes);
+    const checkEnc=await encField(key, 'unlock-check');
+    await Promise.all([
+      sb.from('credentials').delete().eq('user_id', userId),
+      sb.from('notes').delete().eq('user_id', userId)
+    ]);
+    await sb.from('profiles').upsert({user_id:userId, name:(profile&&profile.name)||'', salt:saltB64, check_enc:checkEnc});
+  }
+
+  await sb.auth.signOut();
+  clearCachedSession();
+  session=null; vault=null;
+  ui.authMode='login';
+  ui.err = migrated
+    ? 'Password changed and your data was recovered. Log in with your new password.'
+    : 'Password changed. Your old encrypted data could not be recovered without the old password, so your vault has been reset — log in to start fresh.';
+  render();
+}
 async function doLock(){
   await sb.auth.signOut();
   clearCachedSession();
@@ -655,7 +745,7 @@ function todayISO(){
 function render(){
   const app=document.getElementById('app');
   if(!session){
-    app.innerHTML = ui.authMode==='setup' ? renderSetup() : renderLogin();
+    app.innerHTML = ui.authMode==='recovery' ? renderRecovery() : (ui.authMode==='setup' ? renderSetup() : renderLogin());
     bindAuthEvents();
     return;
   }
@@ -726,15 +816,46 @@ function renderLogin(){
         <input type="password" id="login-pw" placeholder="Master password">
       </div>
       <button class="btn" id="login-submit">Unlock vault</button>
+      <p class="switchline"><a id="go-forgot">Forgot password?</a></p>
       <p class="switchline">New here? <a id="go-setup">Create an account</a></p>
+    </div>
+  </div>`;
+}
+function renderRecovery(){
+  return `
+  <div class="lockwrap">
+    <div class="lockcard">
+      <div class="dial">${dialSVG()}</div>
+      <p class="brandline">Keep<span>.</span></p>
+      <p class="brandsub">Set a new password</p>
+      <p class="errmsg">${escapeHtml(ui.err)}</p>
+      <div class="field">
+        <label>New master password</label>
+        <input type="password" id="rec-pw" placeholder="At least 8 characters" autofocus>
+      </div>
+      <div class="field">
+        <label>Confirm new password</label>
+        <input type="password" id="rec-pw2" placeholder="Re-enter new password">
+      </div>
+      <div class="field">
+        <label>Your previous master password (optional)</label>
+        <input type="password" id="rec-old-pw" placeholder="Enter it here to recover your data">
+      </div>
+      <p class="hint">If you remember your old password, enter it above and your existing credentials, notes, and passwords will be re-encrypted and kept. If you leave it blank (or don't remember it), your login will still be restored, but your existing encrypted data cannot be recovered and your vault will start fresh — this is a limit of how the encryption works, not something we can bypass.</p>
+      <button class="btn" id="recovery-submit">Set new password</button>
     </div>
   </div>`;
 }
 function bindAuthEvents(){
   const goLogin=document.getElementById('go-login');
   const goSetup=document.getElementById('go-setup');
+  const goForgot=document.getElementById('go-forgot');
   if(goLogin) goLogin.onclick=()=>{ui.authMode='login';ui.err='';render();};
   if(goSetup) goSetup.onclick=()=>{ui.authMode='setup';ui.err='';render();};
+  if(goForgot) goForgot.onclick=()=>{
+    const email=document.getElementById('login-email').value.trim();
+    doForgotPassword(email);
+  };
 
   const setupBtn=document.getElementById('setup-submit');
   if(setupBtn){
@@ -756,6 +877,15 @@ function bindAuthEvents(){
     };
     document.getElementById('login-pw').addEventListener('keydown',e=>{if(e.key==='Enter')loginBtn.click();});
   }
+  const recoveryBtn=document.getElementById('recovery-submit');
+  if(recoveryBtn){
+    recoveryBtn.onclick=()=>{
+      const newPw=document.getElementById('rec-pw').value;
+      const newPw2=document.getElementById('rec-pw2').value;
+      const oldPw=document.getElementById('rec-old-pw').value;
+      doCompleteRecovery(newPw, newPw2, oldPw);
+    };
+  }
 }
 
 /* ============================= SHELL ============================= */
@@ -770,8 +900,8 @@ function renderShell(){
   <div class="shell">
     <div class="sidebar">
       <div class="sblogo">Keep<span>.</span></div>
-      ${vault.account && vault.account.name ? `<div style="padding:0 8px 16px;font-size:13px;color:var(--text-dim);">Signed in as <strong style="color:var(--text);">${escapeHtml(vault.account.name)}</strong></div>` : ''}
-      <div class="navsection">
+      <div class="sbaccountrow">
+        ${vault.account && vault.account.name ? `<span class="sbaccount-name">Signed in as <strong>${escapeHtml(vault.account.name)}</strong></span>` : '<span></span>'}
         <div class="navitem ${ui.view==='dashboard'?'active':''}" data-nav="dashboard">
           <span class="navbadge">≡</span> Dashboard
         </div>
@@ -805,6 +935,7 @@ function renderShell(){
       </div>
       <div class="sbfooter">
         <div class="ticks" style="margin-bottom:10px;">${Array.from({length:14}).map(()=>'<span></span>').join('')}</div>
+        <button class="btn btn-ghost btn-sm" style="width:100%;margin-bottom:8px;" id="change-pw-btn">Change password</button>
         <button class="btn btn-ghost btn-sm" style="width:100%;" id="lock-btn">Lock vault</button>
       </div>
     </div>
@@ -820,6 +951,8 @@ function bindShellEvents(){
   });
   const lockBtn=document.getElementById('lock-btn');
   if(lockBtn) lockBtn.onclick=doLock;
+  const changePwBtn=document.getElementById('change-pw-btn');
+  if(changePwBtn) changePwBtn.onclick=openChangePasswordForm;
   bindViewEvents();
 }
 
@@ -1141,6 +1274,76 @@ function closeModal(){
   const el=document.getElementById('modal-overlay');
   if(el) el.remove();
 }
+function openChangePasswordForm(){
+  openModal(`
+    <h3>Change password</h3>
+    <div class="field"><label>Current password</label>
+      <input type="password" id="cp-current" placeholder="Current master password">
+    </div>
+    <div class="field"><label>New password</label>
+      <input type="password" id="cp-new" placeholder="At least 8 characters">
+    </div>
+    <div class="field"><label>Confirm new password</label>
+      <input type="password" id="cp-new2" placeholder="Re-enter new password">
+    </div>
+    <p class="hint" id="cp-status"></p>
+    <div class="modalfoot">
+      <button class="btn" id="cp-submit">Change password</button>
+      <button class="btn btn-ghost" id="cancel-modal-btn">Cancel</button>
+    </div>
+  `);
+  document.getElementById('cancel-modal-btn').onclick=closeModal;
+  document.getElementById('cp-submit').onclick=async ()=>{
+    const statusEl=document.getElementById('cp-status');
+    const currentPw=document.getElementById('cp-current').value;
+    const newPw=document.getElementById('cp-new').value;
+    const newPw2=document.getElementById('cp-new2').value;
+    if(newPw.length<8){ statusEl.textContent='Use at least 8 characters for the new password.'; return; }
+    if(newPw!==newPw2){ statusEl.textContent='New passwords do not match.'; return; }
+
+    statusEl.textContent='Verifying current password…';
+    const oldSaltBytes=b64ToBytes(session.saltB64);
+    const oldKeyCheck=await deriveKey(currentPw, oldSaltBytes);
+    const {data:profile} = await sb.from('profiles').select('*').eq('user_id', session.userId).maybeSingle();
+    let ok=false;
+    try{ ok = profile && (await decField(oldKeyCheck, profile.check_enc))==='unlock-check'; }catch(e){ ok=false; }
+    if(!ok){ statusEl.textContent='Current password is incorrect.'; return; }
+
+    statusEl.textContent='Re-encrypting your data…';
+    const newSaltBytes=crypto.getRandomValues(new Uint8Array(16));
+    const newSaltB64=bytesToB64(newSaltBytes);
+    const newKey=await deriveKey(newPw, newSaltBytes);
+    const newCheckEnc=await encField(newKey, 'unlock-check');
+
+    try{
+      await Promise.all(vault.credentials.map(async c=>{
+        const [password_enc, pin_enc, atm_enc, notes_enc] = await Promise.all([
+          encField(newKey, c.password), encField(newKey, c.pin), encField(newKey, c.atm), encField(newKey, c.notes)
+        ]);
+        return sb.from('credentials').update({password_enc, pin_enc, atm_enc, notes_enc}).eq('id', c.id);
+      }));
+      await Promise.all(vault.notes.map(async n=>{
+        const body_enc=await encField(newKey, n.body);
+        return sb.from('notes').update({body_enc}).eq('id', n.id);
+      }));
+      await sb.from('profiles').update({salt:newSaltB64, check_enc:newCheckEnc}).eq('user_id', session.userId);
+    }catch(e){
+      statusEl.textContent='Something went wrong re-encrypting your data: '+e.message;
+      return;
+    }
+
+    statusEl.textContent='Updating your login…';
+    const {error:updErr} = await sb.auth.updateUser({password:newPw});
+    if(updErr){ statusEl.textContent='Data updated, but login password change failed: '+updErr.message; return; }
+
+    session.key=newKey;
+    session.saltB64=newSaltB64;
+    await cacheSession();
+    closeModal();
+    toast('Password changed');
+  };
+}
+
 function openConfirmModal(message, onConfirm, opts={}){
   const title = opts.title || 'Delete this?';
   const label = opts.label || 'Delete';
