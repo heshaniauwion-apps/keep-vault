@@ -326,7 +326,14 @@
     width:100%;max-width:440px;padding:26px 26px 22px;max-height:88vh;overflow-y:auto;
   }
   .modal h3{font-family:var(--font-display);font-size:18px;margin:0 0 18px;font-weight:600;}
-  .modalfoot{display:flex;gap:10px;margin-top:20px;}
+  .modalfoot{display:flex;gap:10px;margin-top:20px;flex-wrap:wrap;}
+  .detailrow{
+    padding:10px 0;border-bottom:1px solid var(--border-soft);
+  }
+  .detailrow:last-of-type{border-bottom:none;}
+  .detaillabel{font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;}
+  .detailvalue{font-size:14px;color:var(--text);white-space:pre-wrap;word-break:break-word;}
+  .detailvalue.mono{font-family:var(--font-mono);}
   .pwrow{display:flex;gap:8px;}
   .pwrow input{flex:1;}
   select{
@@ -1011,8 +1018,7 @@ function credRowHTML(c){
     </div>
     <div class="credpass" data-reveal="${c.id}" title="Tap to ${revealed?'hide':'show'}">${revealed? escapeHtml(c.password||'') : '••••••••'}</div>
     <div class="rowactions">
-      <button class="iconbtn" data-edit="${c.id}" title="Edit">✎</button>
-      <button class="iconbtn" data-del="${c.id}" title="Delete">×</button>
+      <button class="iconbtn" data-view="${c.id}" title="View">👁</button>
     </div>
   </div>`;
 }
@@ -1363,6 +1369,55 @@ function openConfirmModal(message, onConfirm, opts={}){
   };
 }
 
+function confirmArchiveCredential(id){
+  const c=vault.credentials.find(x=>x.id===id);
+  openConfirmModal(`Move "${c?c.title:'this credential'}" to Archived? You can restore it anytime.`, async ()=>{
+    const {error}=await sb.from('credentials').update({archived:true}).eq('id', id);
+    if(error){ toast('Could not archive: '+error.message, 'error'); return; }
+    if(c) c.archived=true;
+    render();
+    toast('Moved to Archived');
+  }, {title:'Delete this credential?', label:'Delete'});
+}
+
+function credDetailRow(label, value, monospace){
+  if(!value) return '';
+  return `
+    <div class="detailrow">
+      <div class="detaillabel">${escapeHtml(label)}</div>
+      <div class="detailvalue${monospace?' mono':''}">${escapeHtml(value)}</div>
+    </div>`;
+}
+function openCredView(id){
+  const c=vault.credentials.find(x=>x.id===id);
+  if(!c) return;
+  const cat=CATS[c.category]||CATS.other;
+  openModal(`
+    <h3>${escapeHtml(c.title)}</h3>
+    <p style="color:var(--text-dim);font-size:12px;margin:-10px 0 16px;">${escapeHtml(cat.label)}</p>
+    ${credDetailRow('Username / email', c.username, true)}
+    ${credDetailRow('Password', c.password, true)}
+    ${credDetailRow('PIN', c.pin, true)}
+    ${credDetailRow('ATM', c.atm, true)}
+    ${credDetailRow('Notes', c.notes, false)}
+    ${(!c.username && !c.password && !c.pin && !c.atm && !c.notes) ? '<div class="emptyrow">No details saved yet.</div>' : ''}
+    <div class="modalfoot">
+      <button class="btn" id="view-edit-btn">Edit</button>
+      <button class="btn btn-danger" id="view-del-btn">Delete</button>
+      <button class="btn btn-ghost" id="cancel-modal-btn">Close</button>
+    </div>
+  `);
+  document.getElementById('cancel-modal-btn').onclick=closeModal;
+  document.getElementById('view-edit-btn').onclick=()=>{
+    closeModal();
+    openCredForm(c.id);
+  };
+  document.getElementById('view-del-btn').onclick=()=>{
+    closeModal();
+    confirmArchiveCredential(c.id);
+  };
+}
+
 function openCredForm(id, defaultCat){
   const editing = id ? vault.credentials.find(c=>c.id===id) : null;
   const cat = editing ? editing.category : (defaultCat || 'bank');
@@ -1441,14 +1496,7 @@ function openCredForm(id, defaultCat){
   if(editing){
     document.getElementById('delete-cred-btn').onclick=()=>{
       closeModal();
-      openConfirmModal(`Move "${editing.title}" to Archived? You can restore it anytime.`, async ()=>{
-        const {error}=await sb.from('credentials').update({archived:true}).eq('id', editing.id);
-        if(error){ toast('Could not archive: '+error.message, 'error'); return; }
-        const idx=vault.credentials.findIndex(c=>c.id===editing.id);
-        if(idx>-1) vault.credentials[idx].archived=true;
-        render();
-        toast('Moved to Archived');
-      }, {title:'Delete this credential?', label:'Delete'});
+      confirmArchiveCredential(editing.id);
     };
   }
 }
@@ -1584,18 +1632,11 @@ function bindViewEvents(){
   document.querySelectorAll('[data-edit]').forEach(el=>{
     el.onclick=()=>openCredForm(el.getAttribute('data-edit'));
   });
+  document.querySelectorAll('[data-view]').forEach(el=>{
+    el.onclick=()=>openCredView(el.getAttribute('data-view'));
+  });
   document.querySelectorAll('[data-del]').forEach(el=>{
-    el.onclick=()=>{
-      const id=el.getAttribute('data-del');
-      const c=vault.credentials.find(x=>x.id===id);
-      openConfirmModal(`Move "${c?c.title:'this credential'}" to Archived? You can restore it anytime.`, async ()=>{
-        const {error}=await sb.from('credentials').update({archived:true}).eq('id', id);
-        if(error){ toast('Could not archive: '+error.message, 'error'); return; }
-        if(c) c.archived=true;
-        render();
-        toast('Moved to Archived');
-      }, {title:'Delete this credential?', label:'Delete'});
-    };
+    el.onclick=()=>confirmArchiveCredential(el.getAttribute('data-del'));
   });
   document.querySelectorAll('[data-restore-cred]').forEach(el=>{
     el.onclick=()=>{
