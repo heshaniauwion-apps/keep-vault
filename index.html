@@ -1563,8 +1563,8 @@ function openCredForm(id, defaultCat){
     </div>
     <div class="modalfoot">
       <button class="btn" id="save-cred-btn">Save</button>
-      ${editing? `<button class="btn btn-danger" id="delete-cred-btn">Delete</button>` : ''}
-      <button class="btn btn-ghost" id="cancel-modal-btn">Cancel</button>
+      ${editing? `<button class="btn" id="delete-cred-btn">Delete</button>` : ''}
+      <button class="btn" id="cancel-modal-btn">Cancel</button>
     </div>
   `);
   document.getElementById('gen-pw-btn').onclick=()=>{
@@ -1625,8 +1625,8 @@ function openNoteForm(id){
     </div>
     <div class="modalfoot">
       <button class="btn" id="save-note-btn">Save</button>
-      ${editing? `<button class="btn btn-danger" id="delete-note-btn">Delete</button>` : ''}
-      <button class="btn btn-ghost" id="cancel-modal-btn">Cancel</button>
+      ${editing? `<button class="btn" id="delete-note-btn">Delete</button>` : ''}
+      <button class="btn" id="cancel-modal-btn">Cancel</button>
     </div>
   `);
   document.getElementById('cancel-modal-btn').onclick=closeModal;
@@ -1725,8 +1725,8 @@ function openTaskForm(id, defaultDate, defaultTime, defaultCategory){
     </div>
     <div class="modalfoot">
       <button class="btn" id="save-task-btn">Save</button>
-      ${editing? `<button class="btn btn-danger" id="delete-task-btn">Delete</button>` : ''}
-      <button class="btn btn-ghost" id="cancel-modal-btn">Cancel</button>
+      ${editing? `<button class="btn" id="delete-task-btn">Delete</button>` : ''}
+      <button class="btn" id="cancel-modal-btn">Cancel</button>
     </div>
   `);
   document.getElementById('cancel-modal-btn').onclick=closeModal;
