@@ -116,6 +116,24 @@
   .switchline a:hover{text-decoration:underline;}
   .hint{font-size:12px;color:var(--text-faint);margin-top:-8px;margin-bottom:14px;}
 
+  /* ---------- time picker ---------- */
+  .timepicker{display:flex;align-items:center;gap:6px;}
+  .timepicker select{
+    background:var(--panel-2);border:1px solid var(--border);border-radius:8px;
+    padding:11px 6px;font-size:14px;color:var(--text);outline:none;font-family:var(--font-mono);
+    flex:1;min-width:0;text-align:center;
+  }
+  .timepicker select:focus{border-color:var(--brass-dim);}
+  .timepicker select:disabled{opacity:0.45;}
+  .tp-colon{font-family:var(--font-mono);font-size:16px;color:var(--text-dim);flex-shrink:0;}
+  .tp-ampm{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;flex-shrink:0;}
+  .tp-ampm-btn{
+    background:var(--panel-2);border:none;color:var(--text-dim);font-size:12px;font-weight:500;
+    padding:11px 12px;cursor:pointer;font-family:var(--font-body);letter-spacing:0.02em;
+  }
+  .tp-ampm-btn:first-child{border-right:1px solid var(--border);}
+  .tp-ampm-btn.active{background:var(--brass-bg);color:var(--brass);}
+
   /* ---------- app shell ---------- */
   .shell{display:flex;min-height:100vh;}
   .sidebar{
@@ -282,6 +300,13 @@
     background:var(--panel-2);border:1px solid var(--border-soft);
     padding:3px 8px;border-radius:20px;flex-shrink:0;
   }
+  .cdpill{
+    font-size:11px;font-weight:500;padding:3px 9px;border-radius:20px;flex-shrink:0;
+    background:var(--panel-2);color:var(--text-dim);border:1px solid var(--border-soft);
+  }
+  .cdpill.cdsoon{color:var(--brass);background:var(--brass-bg);border-color:var(--brass-dim);}
+  .cdpill.cdtoday{color:var(--danger);background:var(--danger-bg);border-color:var(--danger);}
+  .cdpill.cdover{color:var(--danger);background:var(--danger-bg);border-color:var(--danger);}
 
   /* ---------- time table (hourly grid) ---------- */
   .ttablewrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;}
@@ -324,8 +349,16 @@
   .modal{
     background:var(--panel);border:1px solid var(--border);border-radius:14px;
     width:100%;max-width:440px;padding:26px 26px 22px;max-height:88vh;overflow-y:auto;
+    position:relative;
   }
-  .modal h3{font-family:var(--font-display);font-size:18px;margin:0 0 18px;font-weight:600;}
+  .modal-x{
+    position:absolute;top:14px;right:14px;width:28px;height:28px;border-radius:50%;
+    border:1px solid var(--border);background:var(--panel-2);color:var(--text-dim);
+    font-size:16px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;
+    padding:0;
+  }
+  .modal-x:hover{background:var(--panel-3);color:var(--text);}
+  .modal h3{font-family:var(--font-display);font-size:18px;margin:0 0 18px;font-weight:600;padding-right:24px;}
   .modalfoot{display:flex;gap:10px;margin-top:20px;flex-wrap:wrap;}
   .detailrow{
     padding:10px 0;border-bottom:1px solid var(--border-soft);
@@ -462,6 +495,7 @@ const TASK_CATS={
   personal:{label:'Personal', color:'#2d5a7a'},
   auwion:{label:'Auwion', color:'#8a6a1e'},
   techstar:{label:'TechStar', color:'#3d6b31'},
+  important:{label:'Important date', color:'#a3352c'},
   other:{label:'Other', color:'#6a6a68'}
 };
 
@@ -534,7 +568,7 @@ async function init(){
         const key=await crypto.subtle.importKey('raw', keyBytes, {name:'AES-GCM'}, true, ['encrypt','decrypt']);
         session={key, userId:cached.userId, saltB64:cached.saltB64};
         vault=await loadAllData(cached.userId, key);
-        const validViews=['dashboard','bank','gmail','apps','other','archived','notes','tasklist','timetable','completed'];
+        const validViews=['dashboard','bank','gmail','apps','other','archived','notes','tasklist','important','timetable','completed'];
         const lastView=sessionStorage.getItem(LAST_VIEW_KEY);
         ui.view = validViews.includes(lastView) ? lastView : 'dashboard';
         render();
@@ -933,6 +967,9 @@ function renderShell(){
         <div class="navitem ${ui.view==='tasklist'?'active':''}" data-nav="tasklist">
           <span class="navbadge">☰</span> Task list <span class="navcount">${pendingTaskCount()}</span>
         </div>
+        <div class="navitem ${ui.view==='important'?'active':''}" data-nav="important">
+          <span class="navbadge">✚</span> Important dates <span class="navcount">${vault.tasks.filter(t=>t.category==='important' && !t.done).length}</span>
+        </div>
         <div class="navitem ${ui.view==='timetable'?'active':''}" data-nav="timetable">
           <span class="navbadge">▦</span> Time table
         </div>
@@ -969,6 +1006,7 @@ function renderView(){
   if(ui.view==='archived') return renderArchivedCreds();
   if(ui.view==='notes') return renderNotes();
   if(ui.view==='tasklist') return renderTaskList();
+  if(ui.view==='important') return renderImportantDates();
   if(ui.view==='timetable') return renderTimeTable();
   if(ui.view==='completed') return renderCompletedTasks();
   return '';
@@ -980,6 +1018,10 @@ function renderDashboard(){
   const totalNotes=vault.notes.length;
   const todayStr=todayISO();
   const todayTasks=vault.tasks.filter(t=>t.date===todayStr && !t.done);
+  const upcomingImportant=vault.tasks
+    .filter(t=>t.category==='important' && !t.done)
+    .sort((a,b)=>(a.date||'9999').localeCompare(b.date||'9999') || (a.time||'99:99').localeCompare(b.time||'99:99'))
+    .slice(0,4);
 
   return `
   <div class="topbar">
@@ -998,11 +1040,19 @@ function renderDashboard(){
     <div class="statcard"><div class="statnum">${pendingTaskCount()}</div><div class="statlbl">Open tasks</div></div>
     <div class="statcard"><div class="statnum">${todayTasks.length}</div><div class="statlbl">Due today</div></div>
   </div>
-  <div class="panelbox">
-    <div class="panelhead"><h3>Today's tasks</h3>
-      <button class="linklike" data-nav2="tasklist">Open tasks</button>
+  <div class="dashgrid">
+    <div class="panelbox">
+      <div class="panelhead"><h3>Today's tasks</h3>
+        <button class="linklike" data-nav2="tasklist">Open tasks</button>
+      </div>
+      ${todayTasks.length? todayTasks.map(t=>taskRowHTML(t)).join('') : '<div class="emptyrow">Nothing due today.</div>'}
     </div>
-    ${todayTasks.length? todayTasks.map(t=>taskRowHTML(t)).join('') : '<div class="emptyrow">Nothing due today.</div>'}
+    <div class="panelbox">
+      <div class="panelhead"><h3>Important dates</h3>
+        <button class="linklike" data-nav2="important">See all</button>
+      </div>
+      ${upcomingImportant.length? upcomingImportant.map(t=>importantDateRowHTML(t)).join('') : '<div class="emptyrow">No upcoming doctor visits or report dates.</div>'}
+    </div>
   </div>`;
 }
 
@@ -1195,6 +1245,60 @@ function renderTaskList(){
   </div>`;
 }
 
+function daysUntil(dateStr){
+  if(!dateStr) return null;
+  const today=new Date(todayISO()+'T00:00:00');
+  const d=new Date(dateStr+'T00:00:00');
+  return Math.round((d-today)/86400000);
+}
+function countdownHTML(dateStr){
+  const n=daysUntil(dateStr);
+  if(n===null) return '';
+  if(n<0) return `<span class="cdpill cdover">Overdue</span>`;
+  if(n===0) return `<span class="cdpill cdtoday">Today</span>`;
+  if(n===1) return `<span class="cdpill cdsoon">Tomorrow</span>`;
+  if(n<=7) return `<span class="cdpill cdsoon">In ${n} days</span>`;
+  return `<span class="cdpill">In ${n} days</span>`;
+}
+function importantDateRowHTML(t){
+  return `
+  <div class="taskrow" data-task-id="${t.id}">
+    <div class="checkbox ${t.done?'done':''}" data-toggle-task="${t.id}">${t.done?'✓':''}</div>
+    <div class="tasktext ${t.done?'done':''}" data-task-edit="${t.id}">${escapeHtml(t.text)}</div>
+    ${countdownHTML(t.date)}
+    ${t.time? `<div class="tasktime">${fmtTime(t.time)}</div>` : ''}
+    <div class="taskdate">${t.date? fmtDate(t.date) : ''}</div>
+    <button class="iconbtn" data-task-edit="${t.id}" title="Edit">✎</button>
+    <button class="iconbtn" data-del-task="${t.id}" title="Delete">×</button>
+  </div>`;
+}
+function renderImportantDates(){
+  let list=vault.tasks.filter(t=>t.category==='important' && !t.done);
+  if(ui.search){
+    const q=ui.search.toLowerCase();
+    list=list.filter(t=>(t.text||'').toLowerCase().includes(q));
+  }
+  list=[...list].sort((a,b)=>(a.date||'9999').localeCompare(b.date||'9999') || (a.time||'99:99').localeCompare(b.time||'99:99'));
+  const doneCount=vault.tasks.filter(t=>t.category==='important' && t.done).length;
+
+  return `
+  <div class="topbar">
+    <div>
+      <h1 class="pagetitle">Important dates</h1>
+      <p class="pagesub">Doctor visits, medical reports, and other dates you can't miss</p>
+    </div>
+    <div class="topactions">
+      <input class="searchbox" id="search-input" placeholder="Search" value="${escapeHtml(ui.search)}">
+      <button class="btn btn-ghost btn-sm" id="add-important-btn">+ Add date</button>
+    </div>
+  </div>
+  <div class="panelbox">
+    ${list.length? list.map(t=>importantDateRowHTML(t)).join('') : '<div class="emptyrow">No important dates yet. Add a doctor\'s appointment, report date, or reminder.</div>'}
+  </div>
+  ${doneCount? `<p class="hint" style="margin-top:14px;">${doneCount} completed important date${doneCount===1?'':'s'} — see the Completed tab.</p>` : ''}
+  `;
+}
+
 function renderTimeTable(){
   const dates=getWeekDates(ui.weekOffset);
   const todayStr=todayISO();
@@ -1272,13 +1376,19 @@ function renderCompletedTasks(){
 function openModal(html){
   const wrap=document.createElement('div');
   wrap.className='overlay'; wrap.id='modal-overlay';
-  wrap.innerHTML=`<div class="modal">${html}</div>`;
-  wrap.addEventListener('mousedown',(e)=>{ if(e.target===wrap) closeModal(); });
+  wrap.innerHTML=`<div class="modal"><button class="modal-x" id="modal-x-btn" title="Close" aria-label="Close">×</button>${html}</div>`;
+  /* Clicking the dark backdrop no longer auto-closes the form — use Cancel/Save or the × */
   document.body.appendChild(wrap);
+  document.getElementById('modal-x-btn').onclick=closeModal;
+  document.addEventListener('keydown', escCloseModal);
+}
+function escCloseModal(e){
+  if(e.key==='Escape') closeModal();
 }
 function closeModal(){
   const el=document.getElementById('modal-overlay');
   if(el) el.remove();
+  document.removeEventListener('keydown', escCloseModal);
 }
 function openChangePasswordForm(){
   openModal(`
@@ -1552,11 +1662,34 @@ function openNoteForm(id){
   }
 }
 
-function openTaskForm(id, defaultDate, defaultTime){
+function parseTimeTo12(hhmm){
+  if(!hhmm) return {h12:'', min:'00', ampm:'AM'};
+  const [hStr,mStr]=hhmm.split(':');
+  let h=parseInt(hStr,10), m=parseInt(mStr,10)||0;
+  const ampm = h>=12 ? 'PM':'AM';
+  let h12 = h%12; if(h12===0) h12=12;
+  return {h12:String(h12), min:String(m).padStart(2,'0'), ampm};
+}
+function build24Time(h12, min, ampm){
+  if(!h12) return '';
+  let h=parseInt(h12,10)%12;
+  if(ampm==='PM') h+=12;
+  return String(h).padStart(2,'0')+':'+String(min).padStart(2,'0');
+}
+function openTaskForm(id, defaultDate, defaultTime, defaultCategory){
   const editing = id ? vault.tasks.find(t=>t.id===id) : null;
-  const cat = editing ? editing.category : 'personal';
+  const cat = editing ? editing.category : (defaultCategory || 'personal');
   const date = editing ? editing.date : (defaultDate || todayISO());
   const time = editing ? (editing.time||'') : (defaultTime || '');
+  const parsedTime = parseTimeTo12(time);
+  const minuteSet=new Set();
+  for(let m=0;m<60;m+=5) minuteSet.add(String(m).padStart(2,'0'));
+  if(time) minuteSet.add(parsedTime.min);
+  const minuteOptionsHTML=Array.from(minuteSet).sort().map(m=>
+    `<option value="${m}" ${m===parsedTime.min?'selected':''}>${m}</option>`).join('');
+  const hourOptionsHTML=[1,2,3,4,5,6,7,8,9,10,11,12].map(h=>
+    `<option value="${h}" ${String(h)===parsedTime.h12?'selected':''}>${h}</option>`).join('');
+
   openModal(`
     <h3>${editing? 'Edit task' : 'Add task'}</h3>
     <div class="field"><label>Task</label>
@@ -1570,8 +1703,23 @@ function openTaskForm(id, defaultDate, defaultTime){
     <div class="field"><label>Date</label>
       <input type="date" id="f-task-date" value="${date}">
     </div>
-    <div class="field"><label>Time (optional)</label>
-      <input type="time" id="f-task-time" value="${time}">
+    <div class="field">
+      <label>Time (optional)</label>
+      <div class="timepicker">
+        <select id="f-task-hour" class="tp-hour">
+          <option value="">--</option>
+          ${hourOptionsHTML}
+        </select>
+        <span class="tp-colon">:</span>
+        <select id="f-task-min" class="tp-min" ${!parsedTime.h12?'disabled':''}>
+          ${minuteOptionsHTML}
+        </select>
+        <div class="tp-ampm" id="f-task-ampm-group">
+          <button type="button" class="tp-ampm-btn ${parsedTime.ampm==='AM'?'active':''}" data-ampm="AM">AM</button>
+          <button type="button" class="tp-ampm-btn ${parsedTime.ampm==='PM'?'active':''}" data-ampm="PM">PM</button>
+        </div>
+      </div>
+      <div class="hint" style="margin-top:6px;">Leave hour as “--” for no specific time.</div>
     </div>
     <div class="modalfoot">
       <button class="btn" id="save-task-btn">Save</button>
@@ -1580,12 +1728,22 @@ function openTaskForm(id, defaultDate, defaultTime){
     </div>
   `);
   document.getElementById('cancel-modal-btn').onclick=closeModal;
+  let currentAmpm=parsedTime.ampm;
+  const hourSel=document.getElementById('f-task-hour');
+  const minSel=document.getElementById('f-task-min');
+  hourSel.onchange=()=>{ minSel.disabled=!hourSel.value; };
+  document.querySelectorAll('.tp-ampm-btn').forEach(btn=>{
+    btn.onclick=()=>{
+      currentAmpm=btn.getAttribute('data-ampm');
+      document.querySelectorAll('.tp-ampm-btn').forEach(b=>b.classList.toggle('active', b===btn));
+    };
+  });
   document.getElementById('save-task-btn').onclick=async ()=>{
     const text=document.getElementById('f-task-text').value.trim();
     if(!text){ toast('Write the task first', 'error'); return; }
     const category=document.getElementById('f-task-cat').value;
     const date=document.getElementById('f-task-date').value || todayISO();
-    const time=document.getElementById('f-task-time').value || '';
+    const time=build24Time(hourSel.value, minSel.value, currentAmpm);
     if(editing){
       const {error}=await sb.from('tasks').update({text, category, date, time}).eq('id', editing.id);
       if(error){ toast('Could not save: '+error.message, 'error'); return; }
@@ -1728,6 +1886,10 @@ function bindViewEvents(){
   const addTaskBtn=document.getElementById('add-task-btn');
   if(addTaskBtn){
     addTaskBtn.onclick=()=>openTaskForm(null, ui.weekOffset===0 ? todayISO() : getWeekDates(ui.weekOffset)[0]);
+  }
+  const addImportantBtn=document.getElementById('add-important-btn');
+  if(addImportantBtn){
+    addImportantBtn.onclick=()=>openTaskForm(null, todayISO(), '', 'important');
   }
   const weekPrev=document.getElementById('week-prev');
   const weekNext=document.getElementById('week-next');
