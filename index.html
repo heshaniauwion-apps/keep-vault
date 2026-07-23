@@ -360,6 +360,8 @@
   .modal-x:hover{background:var(--panel-3);color:var(--text);}
   .modal h3{font-family:var(--font-display);font-size:18px;margin:0 0 18px;font-weight:600;padding-right:24px;}
   .modalfoot{display:flex;gap:10px;margin-top:20px;flex-wrap:wrap;}
+  .modalfoot .btn{width:auto;flex:1 1 auto;}
+  .modalfoot .btn-danger{flex-basis:100%;margin-left:0 !important;}
   .detailrow{
     padding:10px 0;border-bottom:1px solid var(--border-soft);
   }
@@ -1561,8 +1563,8 @@ function openCredForm(id, defaultCat){
     </div>
     <div class="modalfoot">
       <button class="btn" id="save-cred-btn">Save</button>
+      ${editing? `<button class="btn btn-danger" id="delete-cred-btn">Delete</button>` : ''}
       <button class="btn btn-ghost" id="cancel-modal-btn">Cancel</button>
-      ${editing? `<button class="btn btn-danger" id="delete-cred-btn" style="margin-left:auto;">Delete</button>` : ''}
     </div>
   `);
   document.getElementById('gen-pw-btn').onclick=()=>{
@@ -1623,8 +1625,8 @@ function openNoteForm(id){
     </div>
     <div class="modalfoot">
       <button class="btn" id="save-note-btn">Save</button>
+      ${editing? `<button class="btn btn-danger" id="delete-note-btn">Delete</button>` : ''}
       <button class="btn btn-ghost" id="cancel-modal-btn">Cancel</button>
-      ${editing? `<button class="btn btn-danger" id="delete-note-btn" style="margin-left:auto;">Delete</button>` : ''}
     </div>
   `);
   document.getElementById('cancel-modal-btn').onclick=closeModal;
@@ -1723,8 +1725,8 @@ function openTaskForm(id, defaultDate, defaultTime, defaultCategory){
     </div>
     <div class="modalfoot">
       <button class="btn" id="save-task-btn">Save</button>
+      ${editing? `<button class="btn btn-danger" id="delete-task-btn">Delete</button>` : ''}
       <button class="btn btn-ghost" id="cancel-modal-btn">Cancel</button>
-      ${editing? `<button class="btn btn-danger" id="delete-task-btn" style="margin-left:auto;">Delete</button>` : ''}
     </div>
   `);
   document.getElementById('cancel-modal-btn').onclick=closeModal;
